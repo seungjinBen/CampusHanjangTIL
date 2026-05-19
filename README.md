@@ -1,3 +1,31 @@
+# 📝 TIL — 2026.05.17
+
+## [Trouble Shooting] 서버 OOM으로 인한 반복 다운 문제
+
+**문제**
+`api.campushanjang.kr` 서버가 5/13부터 5/17까지 총 8번 다운됨
+→ 원인은 OOM(Out of Memory), 리눅스 커널이 Spring Boot 프로세스를 강제 종료
+
+**원인**
+- t3.micro (RAM 1GB) 환경에서 Spring Boot JVM이 500~640MB 점유
+- OS 기본 사용량까지 합치면 메모리 한계 초과
+- `journalctl` 로그에서 `Failed with result 'oom-kill'` 반복 확인
+- systemd가 자동 재시작하지만 근본 원인 미해결로 계속 반복
+
+**해결**
+```bash
+# Swap 메모리 1GB 추가
+sudo fallocate -l 1G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+**교훈**
+> t3.micro에 Spring Boot 올릴 땐 Swap은 기본 세팅이다.
+> 자동 재시작이 된다고 해결된 게 아니다. 로그부터 확인하자.
+
 # 📝 TIL — 2026.05.19
 
 ## [Trouble Shooting] 매칭 카드 중복 소진 문제
