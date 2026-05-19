@@ -12,9 +12,10 @@
 - `journalctl` 로그에서 `Failed with result 'oom-kill'` 반복 확인
 - systemd가 자동 재시작하지만 근본 원인 미해결로 계속 반복
 
-**해결**
+**조치**
+
+1. **Swap 메모리 1GB 추가**
 ```bash
-# Swap 메모리 1GB 추가
 sudo fallocate -l 1G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
@@ -22,9 +23,31 @@ sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
+2. **t3.micro → t3.small 업그레이드**
+RAM 1GB → 2GB 확장 (월 약 $15 추가)
+
+3. **CloudWatch CPU 알람 설정**
+CPU 80% 초과 시 이메일 알림
+
+4. **RateLimitConfig 메모리 누수 수정**
+`ConcurrentHashMap` → `Caffeine Cache` 교체
+→ 서버 업타임이 길어져도 메모리가 무한정 쌓이지 않도록 개선
+
 **교훈**
 > t3.micro에 Spring Boot 올릴 땐 Swap은 기본 세팅이다.
 > 자동 재시작이 된다고 해결된 게 아니다. 로그부터 확인하자.
+
+
+## 📌 추후 개선 예정
+
+| 항목 | 내용 |
+|------|------|
+| JWT 파싱 최적화 | 요청마다 4번 파싱 → 1번으로 줄이기 |
+| N+1 쿼리 개선 | 자정 스케줄러 DB 쿼리 폭발 방지 |
+| RefreshToken 누적 문제 | 만료 토큰 정리 로직 추가 |
+| EncryptionUtil 보안 취약점 | 고정 IV → 랜덤 IV 교체 (DB 마이그레이션 필요) |
+
+---
 
 # 📝 TIL — 2026.05.19
 
@@ -46,7 +69,6 @@ DB 수정 없이 로직만으로 오픈 전 카드를 필터에서 제외, 30일
 **교훈**
 > 프론트에서 화면만 숨긴다고 끝이 아니다. 백엔드 스케줄러에도 오픈일 기준 가드가 필요하다.
 
----
 
 ## [Bug Fix] 중복 선택 시 횟수 이중 차감 문제
 
