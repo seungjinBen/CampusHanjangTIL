@@ -189,3 +189,56 @@ ORDER BY (u.daily_select_count - COUNT(s.id)) DESC;
 > 로컬에서 재현 안 된다고 버그가 없는 게 아니다.  
 > 더블탭·네트워크 재시도 등 실제 환경 변수를 항상 고려해야 한다.  
 > 선택 횟수처럼 중요한 로직엔 멱등성과 동시성을 처음부터 설계에 포함시키자.
+
+
+## [장애 대응] 선택 횟수 과차감 피해 유저 DB 보정
+
+**상황**
+버그 수정 배포 후, 이미 피해를 입은 유저들의 `daily_select_count` 보정 필요
+
+**피해 유저 특정 쿼리**
+```sql
+WITH actual_today AS (
+    SELECT selector_id, COUNT(*) AS cnt
+    FROM selections
+    WHERE created_at >= CURRENT_DATE
+    GROUP BY selector_id
+)
+SELECT u.id, u.nickname,
+       u.daily_select_count AS current_count,
+       COALESCE(a.cnt, 0) AS actual_count,
+       u.daily_select_count - COALESCE(a.cnt, 0) AS over_charged
+FROM users u
+LEFT JOIN actual_today a ON a.selector_id = u.id
+WHERE u.daily_select_count > COALESCE(a.cnt, 0)
+ORDER BY over_charged DESC;
+```
+
+**보정 쿼리**
+```sql
+WITH actual_today AS (
+    SELECT selector_id, COUNT(*) AS cnt
+    FROM selections
+    WHERE created_at >= CURRENT_DATE
+    GROUP BY selector_id
+)
+UPDATE users
+SET daily_select_count = COALESCE(
+    (SELECT cnt FROM actual_today WHERE selector_id = users.id), 0
+)
+WHERE daily_select_count > COALESCE(
+    (SELECT cnt FROM actual_today WHERE selector_id = users.id), 0
+)
+RETURNING id, nickname, daily_select_count AS corrected_count;
+```
+
+**설계 포인트**
+- `CURRENT_DATE` → 오늘 자정 기준으로만 집계
+- `COALESCE(..., 0)` → 오늘 선택이 아예 없는 유저도 처리
+- `WHERE daily_select_count > actual` → 정상 유저는 건드리지 않음
+- `RETURNING` → 보정된 유저 목록 즉시 확인 가능
+
+**교훈**
+> 버그 수정만으로 끝이 아니다.  
+> 이미 피해를 입은 유저까지 복구해야 진짜 대응이 완료된다.  
+> 자정 초기화 스케줄러 덕분에 무중단으로 보정할 수 있었다.
