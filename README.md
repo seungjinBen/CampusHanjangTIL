@@ -127,16 +127,6 @@ if (cards.size() < 10) {
 ---
 # 📝 TIL — 2026.05.20
 
-## [Feature] 유저 나이 정보 표시 추가
-
-**배경**
-유저 피드백으로 매칭 카드에 나이 정보 표시 요청 수신
-
-**구현**
-- `birthYear` 필드를 카드 응답에 포함
-- 프론트엔드에서 `~~년생` 형식으로 표시
-
-
 ## [Bug Fix] 선택 횟수 비정상 차감 문제 (멱등성 누락 + 동시성)
 
 **문제**
@@ -241,3 +231,27 @@ RETURNING id, nickname, daily_select_count AS corrected_count;
 > 버그 수정만으로 끝이 아니다.  
 > 이미 피해를 입은 유저까지 복구해야 진짜 대응이 완료된다.  
 > 자정 초기화 스케줄러 덕분에 무중단으로 보정할 수 있었다.
+
+
+## [Performance] Firebase Storage 이미지 로딩 속도 개선
+
+**문제**
+매칭 카드 이미지 10장이 매번 느리게 로딩됨
+
+**원인**
+Firebase Storage 기본 Cache-Control이 `private, max-age=0`으로 설정되어 있어 매 요청마다 Firebase 서버에서 새로 받아오고 있었음
+
+**해결**
+```java
+// 업로드 시 Cache-Control 명시적 설정
+BlobInfo.newBuilder(blobId)
+    .setContentType("image/jpeg")
+    .setCacheControl("public, max-age=2592000") // 30일
+    .build();
+```
+신규 업로드부터 브라우저 캐시 적용, 두 번째 방문부터 즉시 로드
+
+**교훈**
+> Firebase Storage 기본값은 캐시를 하지 않는다.  
+> 토이프로젝트에선 혼자 쓰니 몰랐지만, 실서비스에서 유저가 늘어나자 바로 체감됐다.  
+> 실서비스 운영이 토이프로젝트에선 발견 못한 문제를 드러낸다.
