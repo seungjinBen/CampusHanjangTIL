@@ -136,3 +136,56 @@ if (cards.size() < 10) {
 **구현**
 - `birthYear` 필드를 카드 응답에 포함
 - 프론트엔드에서 `~~년생` 형식으로 표시
+
+
+## [Bug Fix] 선택 횟수 비정상 차감 문제 (멱등성 누락 + 동시성)
+
+**문제**
+유저 2~3명으로부터 "한 번만 선택했는데 횟수가 3번 차감됐다"는 제보 수신
+→ 로컬 테스트 6개 계정으로는 재현 불가 → AI 코드 분석으로 원인 특정
+
+**원인**
+
+버그 1 (주요) — 멱등성 가드 누락
+- 이상형 일치율 < 75% 인 후보 선택 시 `NOTE_REQUIRED` 분기에서 `selectionRepository.save()` 미호출
+- 재진입 가드 `existsBySelectorIdAndSelectedId()`가 항상 `false` 반환
+- 더블탭 or 네트워크 재시도로 `POST /api/match/select` 중복 전송 시 `incrementSelectCount()`가 매번 실행됨
+
+버그 2 — 경쟁 조건
+- `getUser()`가 row lock 없이 조회 → 동시 요청 2개가 `dailySelectCount`를 동시에 읽으면 초과 선택 가능
+
+버그 3 — sendNote() 무검증
+- `select()` 호출 없이 `sendNote()` 직접 호출 가능
+- 같은 상대에게 쪽지 중복 전송을 막지 않음
+
+**해결**
+```java
+// 버그 1: NOTE_REQUIRED 분기에서도 Selection 즉시 저장
+selectionRepository.save(new Selection(selectorId, selectedId, NOTE_SENT, matchScore));
+
+// 버그 2: 비관적 락 적용
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+findByIdForUpdate(Long id);
+
+// 버그 3: sendNote() 진입 시 검증 추가
+NOTE_SENT Selection 존재 확인 + 중복 쪽지 전송 차단
+```
+
+**피해 유저 추적 쿼리**
+```sql
+SELECT u.id, u.nickname, u.daily_select_count,
+       COUNT(s.id) AS selection_count
+FROM users u
+LEFT JOIN selections s ON s.selector_id = u.id
+    AND s.created_at >= CURRENT_DATE
+WHERE u.daily_select_count > 0
+GROUP BY u.id, u.nickname, u.daily_select_count
+HAVING u.daily_select_count > COUNT(s.id)
+ORDER BY (u.daily_select_count - COUNT(s.id)) DESC;
+```
+→ `daily_select_count > 실제 selections` 인 유저를 특정해 수동 보정 또는 자정 초기화 대기
+
+**교훈**
+> 로컬에서 재현 안 된다고 버그가 없는 게 아니다.  
+> 더블탭·네트워크 재시도 등 실제 환경 변수를 항상 고려해야 한다.  
+> 선택 횟수처럼 중요한 로직엔 멱등성과 동시성을 처음부터 설계에 포함시키자.
