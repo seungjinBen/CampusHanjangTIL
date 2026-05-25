@@ -255,3 +255,41 @@ BlobInfo.newBuilder(blobId)
 > Firebase Storage 기본값은 캐시를 하지 않는다.  
 > 토이프로젝트에선 혼자 쓰니 몰랐지만, 실서비스에서 유저가 늘어나자 바로 체감됐다.  
 > 실서비스 운영이 토이프로젝트에선 발견 못한 문제를 드러낸다.
+
+---
+📝 TIL — 2026.05.25
+## [Performance] N+1 쿼리 개선 — k6 부하테스트 검증
+
+**문제**
+매칭 카드 조회 시 유저 1명당 22개 쿼리 발생
+500VU 환경에서 p95 응답시간 23,527ms, 에러율 0.83%
+
+**원인**
+```
+getTodayCards: 1(user) + 1(cards) + 10(traits×10) + 10(photos×10) = 22쿼리
+getReceivedNotes: 1(notes) + N(traits) + N(photos) = 2N+1쿼리
+```
+
+**해결**
+```java
+// Before: 카드 N장 → N번 개별 조회
+buildCardDto(DailyCard) × N
+
+// After: 배치 IN 쿼리로 한 번에 조회
+photoRepository.findByUserIdIn(ids)       // 1쿼리
+userTraitRepository.findByUserIdIn(ids)   // 1쿼리
+Map으로 변환 후 루프에서 O(1) 조회
+```
+
+**결과 (500VU 기준)**
+
+| 지표 | 개선 전 | 개선 후 | 개선율 |
+|------|---------|---------|--------|
+| p95 응답시간 | 23,527ms | 8,873ms | **62.3% 단축** |
+| RPS | 62.3 | 128.0 | **105% 향상** |
+| 에러율 | 0.83% | 0.00% | **완전 해소** |
+| 총 처리량 | 10,670건 | 21,431건 | **2배 증가** |
+
+**교훈**
+> 쿼리 수 82% 감소가 커넥션 풀 경합을 해소해  
+> 전 엔드포인트에 걸쳐 복합 성능 향상 효과를 만들었다.
